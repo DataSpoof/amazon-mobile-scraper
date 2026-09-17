@@ -1,0 +1,94 @@
+name: Automated Web Scraping
+
+on:
+  schedule:
+    # Run scraping daily at 3 AM UTC
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    # Allow manual trigger from GitHub Actions tab
+
+jobs:
+  scrape-amazon-mobiles:
+    name: Scrape Amazon Mobiles
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Install Chrome
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y chromium-browser chromium-chromedriver
+
+    - name: Verify Chrome installation
+      run: |
+        chromium-browser --version
+        chromedriver --version
+
+    - name: Run scraper
+      run: python amazon_mobile_scraper.py
+      timeout-minutes: 5
+
+    - name: Display scraped data summary
+      run: |
+        echo "Scraping completed!"
+        echo "---"
+        if [ -f mobile_results.json ]; then
+          echo "JSON file created successfully"
+          python -c "import json; data=json.load(open('mobile_results.json')); print(f'Total products: {len(data)}')"
+        fi
+        if [ -f mobile_results.csv ]; then
+          echo "CSV file created successfully"
+          wc -l mobile_results.csv
+        fi
+
+    - name: Upload results to artifacts
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: scraping-results
+        path: |
+          mobile_results.json
+          mobile_results.csv
+          mobile_results_simple.json
+        retention-days: 30
+
+    - name: Commit and push results (if changed)
+      if: always()
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add -A
+        git diff --quiet && git diff --staged --quiet || (git commit -m "chore: update scraping results - $(date +'%Y-%m-%d %H:%M:%S')" && git push)
+      continue-on-error: true
+
+    - name: Create issue on failure
+      if: failure()
+      uses: actions/github-script@v7
+      with:
+        script: |
+          github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: 'Scraping workflow failed',
+            body: 'The automated scraping job failed. Check the workflow run for details.',
+            labels: ['bug', 'automated']
+          })
+
+    - name: Success notification
+      if: success()
+      run: |
+        echo "✓ Scraping completed successfully!"
+        echo "✓ Results updated and committed"
+        echo "✓ Artifacts saved"
